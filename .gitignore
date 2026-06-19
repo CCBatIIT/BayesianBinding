@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+
+# Generated analysis outputs
+results/
+examples/**/results/
+examples/data/local/
+
+# Local/private planning notes that should not be pushed by default.
+docs/private_notes/
+
+# Roadmap / cross-modality extension notes kept local until the public scope is finalized.
+docs/EXTENDING_MODALITIES.md
+docs/MODEL_ROADMAP.md
+

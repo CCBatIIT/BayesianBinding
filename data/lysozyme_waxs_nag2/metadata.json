@@ -1,0 +1,26 @@
+{
+  "system": "lysozyme + (NAG)2 (chitobiose), 1:1 binding",
+  "source": "Argonne WAXS_Analysis/Run17_Feb2010/Lysozyme/NAG2.mat (paper's preprocessed input).",
+  "reference": "Minh & Makowski (2013) Biophys J 104:873, Table 1 (With SVD); analyze1site.m.",
+  "reference_delta_g_kcal_per_mol": -5.733,
+  "reference_ci68_kcal_per_mol": [
+    -5.802,
+    -5.669
+  ],
+  "n_curves": 192,
+  "n_angles": 364,
+  "n_conditions": 20,
+  "two_theta_deg_range": [
+    1.106,
+    11.27
+  ],
+  "one_over_d_max_inv_angstrom": 0.2,
+  "wavelength_angstrom": 0.979492,
+  "temperature_K": 277.15,
+  "concentration_units": "molar (Mo_all/Lo_all from the .mat; [Lys]=1 mM = 14.3 mg/mL)",
+  "notes": [
+    "Intensities are the paper's ion-chamber-calibrated, outlier-removed, beam-stop-truncated",
+    "D_all (MATLAB loadTable.m); the wide-angle region (1/d > 0.2) is excluded.",
+    "Reproduce with waxs_delta_g_posterior (a faithful port of analyze1site.m)."
+  ]
+}

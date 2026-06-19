@@ -1,0 +1,46 @@
+{
+  "source": "https://github.com/nguyentrunghai/bayesian-itc (racemic_mixture/)",
+  "reference": "Nguyen, La, Burke, Minh (2022) PLOS ONE 17(9):e0273656. https://doi.org/10.1371/journal.pone.0273656",
+  "notes": [
+    "Integrated heats were digitized from figures in the original dissertations/paper with WebPlotDigitizer.",
+    "All datasets were analyzed assuming a temperature of 300 K (Nguyen et al. 2022).",
+    "Cell volume is 1.3513 mL for all datasets.",
+    "Heats are integrated injection heats in microcalories (first DAT column); injection volume (microliters) is the second column.",
+    "Concentration availability is per S1 Table (https://doi.org/10.1371/journal.pone.0273656.s005). A known stated concentration uses an informative lognormal prior; an unavailable one uses an uninformative uniform prior on the linear concentration over [stated / 10, stated * 10], where the stated value below is then only a placeholder that sets the prior range."
+  ],
+  "datasets": {
+    "Fokkens_1d": {
+      "file": "Fokkens_1d.DAT",
+      "system": "rac-2 titrated into Thrombin",
+      "cell_concentration_mM": 0.05,
+      "syringe_concentration_mM": 1.0,
+      "cell_volume_mL": 1.3513,
+      "temperature_K": 300.0,
+      "n_injections": 24,
+      "injection_volume_uL": 10.0,
+      "cell_concentration_known": true,
+      "syringe_concentration_known": true,
+      "cell_concentration_prior": "lognormal",
+      "syringe_concentration_prior": "lognormal",
+      "best_model": "racemic_mixture",
+      "comment": "Racemic mixture; posterior of rho is sharply peaked near 0.45 (close to the 0.5 racemic value). RM and EM models are equally best (Table 3). Both concentrations are stated in S1 Table, so both use lognormal priors."
+    },
+    "Baum_59": {
+      "file": "Baum_59.DAT",
+      "system": "UB_THR_32 + n-pentyl-Benzamidin titrated into Trypsin",
+      "cell_concentration_mM": 0.2,
+      "syringe_concentration_mM": 3.0,
+      "cell_volume_mL": 1.3513,
+      "temperature_K": 300.0,
+      "n_injections": 39,
+      "injection_volume_uL": 10.0,
+      "cell_concentration_known": false,
+      "syringe_concentration_known": true,
+      "cell_concentration_prior": "uniform",
+      "syringe_concentration_prior": "lognormal",
+      "concentration_range_factor": 10.0,
+      "best_model": "enantiomeric_mixture",
+      "comment": "Not a racemic mixture; the EM model is clearly best and the posterior of rho is peaked near 0.15. Per S1 Table the cell (receptor) concentration was unavailable (uniform prior; 0.2 mM is a placeholder setting the prior range) while the syringe concentration was stated as 3.0 mM (lognormal prior). The known ligand concentration keeps delta_g1/delta_g2 well determined, while the unknown receptor concentration leaves delta_h1 broad."
+    }
+  }
+}

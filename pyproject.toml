@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bayesian-binding"
+version = "0.1.0"
+description = "NumPyro/JAX Bayesian regression and model comparison for ITC and WAXS binding data."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "David Minh" }
+]
+dependencies = [
+  "arviz",
+  "jax",
+  "jaxlib",
+  "matplotlib",
+  "nbformat",
+  "numpy",
+  "numpyro",
+  "pandas",
+  "scipy"
+]
+
+[project.optional-dependencies]
+dev = [
+  "ipykernel",
+  "jupyter",
+  "pytest",
+  "ruff"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Run everything except the slow published-posterior regressions by default, so a plain
+# `pytest` stays fast (tens of seconds): it includes the smoke tests (a quick MAP fit and a
+# short MCMC for each validated model). Run the full reproductions on demand with
+# `pytest -m regression`, or just the smoke tests with `pytest -m smoke`.
+addopts = "-m 'not regression'"
+markers = [
+  "regression: slow MCMC regression tests reproducing published posteriors; run with `pytest -m regression`",
+  "smoke: fast MAP + short MCMC checks that each model still fits; run with `pytest -m smoke`"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+# Notebooks legitimately import after a configuration cell (E402) and use compact,
+# semicolon-separated / trailing-semicolon plotting statements (E702/E703).
+"*.ipynb" = ["E402", "E702", "E703"]

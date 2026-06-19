@@ -1,0 +1,23 @@
+# delta25_dump_100uM: integrated injection heats (ucal) and injection volumes (uL).
+# Public source: eLife 2022 (Bonin, Sapienza, Lee), Appendix 1 Figure 3 source data A1F3SD3; Dryad doi:10.5061/dryad.j9kd51cfx.
+# Integrated from the raw MicroCal .itc trace (tail-median baseline + trapezoid; first-pass reduction).
+-2.13924	0.2
+-23.321	2
+-22.8286	2
+-21.8512	2
+-20.6017	2
+-19.9442	2
+-17.9559	2
+-14.1331	2
+-10.1381	2
+-6.29991	2
+-3.54843	2
+-2.07575	2
+-1.36893	2
+-1.09391	2
+-0.603495	2
+-0.97842	2
+-0.637225	2
+-2.8559	2
+-0.135945	2
+0.040085	2

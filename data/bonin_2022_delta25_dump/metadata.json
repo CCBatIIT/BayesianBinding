@@ -1,0 +1,35 @@
+{
+  "system": "dUMP titrated into N-terminally truncated (Δ25) human thymidylate synthase (Δ25 hTS); effectively independent (non-cooperative) two-site binding.",
+  "source": "Public ITC source data from Bonin, Sapienza & Lee (2022) eLife, Appendix 1—Figure 3 (source data A1F3SD1-3); also deposited at Dryad (doi:10.5061/dryad.j9kd51cfx). The raw MicroCal .itc traces were integrated here to injection heats (tail-median baseline + trapezoid).",
+  "reference": "Bonin, Sapienza, Lee (2022) 'Dynamic allostery in substrate binding by human thymidylate synthase', eLife 11:e79915. https://doi.org/10.7554/eLife.79915",
+  "data_doi": "https://doi.org/10.5061/dryad.j9kd51cfx",
+  "cell_volume_mL": 0.2064,
+  "temperature_K": 298.15,
+  "notes": [
+    "dUMP titrated into Δ25 hTS dimer at 25 C (see eLife 2022 Methods for buffer composition).",
+    "Heats are integrated injection heats in microcalories (first DAT column); injection volume in microliters is the second column.",
+    "The Δ25 N-terminal truncation abolishes the positive cooperativity seen for full-length hTS/dUMP (Bonin et al. 2019, Biophys J 117:1074, https://doi.org/10.1016/j.bpj.2019.08.015): a global cooperative (sequential two-site) fit of these isotherms returns delta_delta_g ~ 0 (cooperativity ratio ~ 1, DG1 ~ DG2), i.e. effectively independent two-site binding.",
+    "A single cell-concentration scaling factor (~0.77 here) is shared across the three isotherms; each isotherm keeps its own heat offset and noise scale.",
+    "The integrated heats are a transparent first-pass reduction of the public raw traces (suitable for this regression example, not final calorimetric reduction)."
+  ],
+  "datasets": {
+    "delta25_dump_25uM": {
+      "file": "delta25_dump_25uM.DAT",
+      "cell_concentration_mM": 0.025,
+      "syringe_concentration_mM": 0.5,
+      "n_injections": 39
+    },
+    "delta25_dump_50uM": {
+      "file": "delta25_dump_50uM.DAT",
+      "cell_concentration_mM": 0.05,
+      "syringe_concentration_mM": 1.0,
+      "n_injections": 39
+    },
+    "delta25_dump_100uM": {
+      "file": "delta25_dump_100uM.DAT",
+      "cell_concentration_mM": 0.1,
+      "syringe_concentration_mM": 2.0,
+      "n_injections": 20
+    }
+  }
+}
