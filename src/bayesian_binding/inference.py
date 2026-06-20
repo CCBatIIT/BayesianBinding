@@ -659,7 +659,10 @@ def run_mcmc_global(
 # Models whose ``enthalpy_density`` expects monomer-equivalent total protein (2 * dimer total). The
 # preformed-dimer model (``cooperative``) instead takes the dimer total directly.
 _MONOMER_EQUIVALENT_MODELS = ("dimerization_cooperative", "dimerization_monomer_cooperative")
-_CURATED_MODELS = ("cooperative", "dimerization_cooperative", "dimerization_monomer_cooperative")
+_CURATED_MODELS = (
+    "cooperative", "cooperative_equal_affinity", "cooperative_equivalent_sites",
+    "dimerization_cooperative", "dimerization_monomer_cooperative",
+)
 
 
 def _curated_protein_factor(model_name: str) -> float:
@@ -763,13 +766,15 @@ def build_global_curated_itc_model(
         )
 
     def numpyro_model():
-        thermo = _sample_curated_thermodynamics(
+        sampled = _sample_curated_thermodynamics(
             model_name,
             all_bounds,
             fixed,
             delta_g_dimer_prior=delta_g_dimer_prior,
             delta_h_prior_sd=delta_h_prior_sd,
         )
+        # expand reduced null-model params to full enthalpy_density kwargs (identity for base models)
+        thermo = _thermo_to_heat_kwargs(model_name, sampled)
         if fit_protein_concentration_scale and "protein_concentration_scale" not in fixed:
             scale = numpyro.sample(
                 "protein_concentration_scale",
