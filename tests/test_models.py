@@ -3,6 +3,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+from pytest import approx
 
 from bayesian_binding.data import load_dat
 from bayesian_binding.constants import beta_mol_per_kcal
@@ -14,6 +15,7 @@ from bayesian_binding.models import (
     DimerizationMonomerCooperativeBindingModel,
     EnantiomericMixtureBindingModel,
     TwoComponentBindingModel,
+    association_constant_from_delta_g,
 )
 
 
@@ -36,6 +38,88 @@ def test_two_component_expected_heats_shape():
     )
     assert q.shape == experiment.heats_microcalorie.shape
     assert np.all(np.isfinite(np.asarray(q)))
+
+
+def test_cooperative_two_site_default_matches_explicit_polynomial():
+    # The default n_sites=2 must stay byte-identical to the historical 1 + 2 ka1 x + ka1 ka2 x^2 model.
+    temperature_k = 279.15
+    delta_g, delta_delta_g = -8.0, -1.0
+    ka1 = float(association_constant_from_delta_g(delta_g, temperature_k))
+    ka2 = float(association_constant_from_delta_g(delta_g + delta_delta_g, temperature_k))
+    protein, ligand = 4.0e-5, 6.0e-5
+    free, apo, bound = CooperativeBindingModel._species(protein, ligand, [ka1, ka2])
+    z = 1.0 + 2.0 * ka1 * free + ka1 * ka2 * free**2
+    assert float(apo) == approx(protein / z, rel=1e-9)
+    assert float(bound[0]) == approx(protein * 2.0 * ka1 * free / z, rel=1e-9)  # singly
+    assert float(bound[1]) == approx(protein * ka1 * ka2 * free**2 / z, rel=1e-9)  # doubly
+    # Legacy equilibrium_species keys preserved for two sites.
+    species = CooperativeBindingModel.equilibrium_species(
+        jnp.array([protein]), jnp.array([ligand]), temperature_k, delta_g=delta_g, delta_delta_g=delta_delta_g
+    )
+    assert set(species) == {"free_ligand", "apo_protein", "singly_bound", "doubly_bound"}
+
+
+def test_cooperative_four_site_independent_limit_matches_langmuir():
+    # Four independent identical sites: all stepwise intrinsic dG equal (delta_delta_g_i = 0). The
+    # binomial statistical factors make mean occupancy 4 * ka * x / (1 + ka * x).
+    temperature_k = 279.15
+    intrinsic_dg = -7.0
+    ka = float(association_constant_from_delta_g(intrinsic_dg, temperature_k))
+    constants = [association_constant_from_delta_g(intrinsic_dg, temperature_k)] * 4
+    protein = 3.0e-5
+    for ligand_total in (1.0e-5, 5.0e-5, 1.2e-4, 3.0e-4):
+        free, apo, bound = CooperativeBindingModel._species(protein, ligand_total, constants)
+        occupancy = float(sum((k + 1) * bound[k] for k in range(4)) / protein)
+        expected = float(4.0 * ka * free / (1.0 + ka * free))
+        assert occupancy == approx(expected, rel=1e-6)
+        assert float(apo + sum(bound)) == approx(protein, rel=1e-9)  # populations sum to total
+        assert float(free + sum((k + 1) * bound[k] for k in range(4))) == approx(ligand_total, rel=1e-7)
+
+
+def test_cooperative_four_site_expected_heats_shape_and_gradient():
+    experiment = load_dat(FIXTURES / "simple.DAT")
+    kwargs = dict(
+        cell_volume_liter=experiment.cell_volume_liter,
+        cell_concentration_molar=experiment.cell_concentration_molar,
+        syringe_concentration_molar=experiment.syringe_concentration_molar,
+        temperature_k=experiment.temperature_k,
+        delta_g=-9.0,
+        delta_delta_g_2=1.0,
+        delta_delta_g_3=2.5,
+        delta_delta_g_4=3.5,
+        delta_h_1=-5.0,
+        delta_h_2=-4.0,
+        delta_h_3=-3.0,
+        delta_h_4=-2.0,
+        heat_offset=0.0,
+    )
+    four_site = CooperativeBindingModel(n_sites=4)
+    q = four_site.expected_heats(experiment.injection_volumes_liter, **kwargs)
+    assert q.shape == experiment.heats_microcalorie.shape
+    assert np.all(np.isfinite(np.asarray(q)))
+
+    def loss(delta_g):
+        local = dict(kwargs, delta_g=delta_g)
+        return jnp.sum(four_site.expected_heats(experiment.injection_volumes_liter, **local) ** 2)
+
+    grad = float(jax.grad(loss)(-9.0))  # implicit-gradient solver must give a finite, nonzero gradient
+    assert np.isfinite(grad) and grad != 0.0
+
+
+def test_cooperative_four_site_equilibrium_species_columns():
+    species = CooperativeBindingModel(n_sites=4).equilibrium_species(
+        jnp.array([3.0e-5, 3.0e-5]),
+        jnp.array([5.0e-5, 1.5e-4]),
+        279.15,
+        delta_g=-9.0,
+        delta_delta_g_2=1.0,
+        delta_delta_g_3=2.5,
+        delta_delta_g_4=3.5,
+    )
+    assert set(species) == {"free_ligand", "apo_protein", "bound_1", "bound_2", "bound_3", "bound_4"}
+    stacked = np.stack([np.asarray(species[name]) for name in species])
+    assert stacked.shape == (6, 2)
+    assert np.all(np.isfinite(stacked)) and np.all(stacked >= -1e-12)
 
 
 def test_adk_adp_steady_state_mass_balance_and_reaction_quotient():

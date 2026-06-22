@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import comb
 
 from bayesian_binding import _jax_config as _jax_config
 
@@ -269,74 +270,139 @@ class AdKADPSteadyStateModel:
 
 @dataclass(frozen=True)
 class CooperativeBindingModel:
-    """Sequential two-site model using `delta_g` and `delta_delta_g`.
+    """Sequential ``n_sites``-site cooperative model (default two sites).
 
-    `delta_g` is the first binding free energy and `delta_delta_g` shifts the
-    second binding step, so `delta_g_second = delta_g + delta_delta_g`.
-    Negative `delta_delta_g` corresponds to positive cooperativity.
+    ``n_sites`` identical, interacting ligand sites on one receptor. The binding polynomial uses
+    **microscopic** stepwise association constants with explicit binomial statistical factors::
 
-    Two no-cooperativity nulls are available as flags (``expected_heats`` always takes the full
-    parameter set; :meth:`heat_kwargs` expands the reduced parameters to it, and the model builders
-    use it):
+        z = sum_{j=0}^{n} C(n, j) * (prod_{i=1..j} ka_i) * x^j,    ka_i = exp(-delta_g_i / RT),
 
-    - ``equivalent_sites`` -- the two sites are forced **fully equal** (``delta_delta_g = 0`` *and*
-      ``delta_h_first = delta_h_second``), fit with only ``delta_g`` and ``delta_h``. Tests whether
-      the two binding events are thermodynamically identical.
-    - ``equal_affinity`` -- only the **free-energy** cooperativity is removed (``delta_delta_g = 0``)
-      while the two step enthalpies ``delta_h_first``, ``delta_h_second`` stay free. Tests
-      cooperativity in *affinity* alone, leaving an enthalpic site difference (with compensating
-      entropy) to the data. The corresponding Bayes factor directly nests inside the full model
-      with ``delta_delta_g`` as the single extra parameter.
+    so the fraction of receptor with ``j`` ligands bound is ``C(n,j)(prod ka_i) x^j / z`` and zero
+    free-energy cooperativity (all ``ka_i`` equal) factorizes to ``(1 + ka x)^n`` -- independent
+    identical sites. ``delta_g_1 = delta_g`` is the first intrinsic step and the later steps are given
+    as offsets, ``delta_g_i = delta_g + delta_delta_g_i``; each step carries its own enthalpy.
+
+    **Parameter API (and backward compatibility).** For the default ``n_sites = 2`` the parameters are
+    exactly the historical names and the math is byte-for-byte identical to the original two-site
+    model: ``delta_g``, ``delta_delta_g`` (= ``delta_g_2 - delta_g_1``), ``delta_h_first``,
+    ``delta_h_second``. For ``n_sites > 2`` the per-step parameters are the indexed names
+    ``delta_delta_g_2 .. delta_delta_g_n`` and ``delta_h_1 .. delta_h_n`` (``delta_g`` is still step 1).
+    The static methods infer the site count from whichever parameter names are present, so every
+    existing call -- ``CooperativeBindingModel.expected_heats(...)`` /
+    ``MODEL_REGISTRY['cooperative'].equilibrium_species(...)`` with the two-site names -- keeps working
+    unchanged. ``equilibrium_species`` likewise returns the legacy ``singly_bound`` / ``doubly_bound``
+    keys for two sites and ``bound_1 .. bound_n`` for more.
+
+    Two no-cooperativity nulls are available as flags (:meth:`heat_kwargs` expands the reduced
+    parameters to the full per-step set, and the model builders use it):
+
+    - ``equivalent_sites`` -- all sites forced **fully equal** (every ``delta_delta_g_i = 0`` *and* all
+      step enthalpies equal), fit with only ``delta_g`` and ``delta_h``.
+    - ``equal_affinity`` -- only the **free-energy** cooperativity is removed (every
+      ``delta_delta_g_i = 0``) while the step enthalpies stay free. For two sites the corresponding
+      Bayes factor nests inside the full model with ``delta_delta_g`` as the single extra parameter.
 
     This mirrors the ``racemic`` flag on ``EnantiomericMixtureBindingModel``.
     """
 
     name: str = "cooperative"
+    n_sites: int = 2
     equivalent_sites: bool = False
     equal_affinity: bool = False
 
     def heat_kwargs(self, thermodynamics) -> dict:
         """Return the ``expected_heats`` thermodynamic kwargs from the sampled parameters.
 
-        Identity for the full model; ``equivalent_sites`` maps ``{delta_g, delta_h}`` to
-        ``{delta_g, delta_delta_g=0, delta_h_first=delta_h, delta_h_second=delta_h}``;
-        ``equal_affinity`` maps ``{delta_g, delta_h_first, delta_h_second}`` to the same with
-        ``delta_delta_g=0`` but the two enthalpies kept distinct.
+        Identity for the full model; ``equivalent_sites`` maps ``{delta_g, delta_h}`` and
+        ``equal_affinity`` maps ``{delta_g, delta_h_*}`` to the full per-step kwargs with every
+        free-energy cooperativity zeroed. For two sites the output uses the legacy names
+        (``delta_delta_g``, ``delta_h_first``, ``delta_h_second``); for more sites the indexed names.
         """
+        if not (self.equivalent_sites or self.equal_affinity):
+            return dict(thermodynamics)
+        n = self.n_sites
+        out: dict = {"delta_g": thermodynamics["delta_g"]}
+        if n == 2:
+            out["delta_delta_g"] = 0.0
+        else:
+            for i in range(2, n + 1):
+                out[f"delta_delta_g_{i}"] = 0.0
         if self.equivalent_sites:
             delta_h = thermodynamics["delta_h"]
-            return {
-                "delta_g": thermodynamics["delta_g"],
-                "delta_delta_g": 0.0,
-                "delta_h_first": delta_h,
-                "delta_h_second": delta_h,
-            }
-        if self.equal_affinity:
-            return {
-                "delta_g": thermodynamics["delta_g"],
-                "delta_delta_g": 0.0,
-                "delta_h_first": thermodynamics["delta_h_first"],
-                "delta_h_second": thermodynamics["delta_h_second"],
-            }
-        return dict(thermodynamics)
+            step_enthalpies = [delta_h] * n
+        else:  # equal_affinity: the step enthalpies stay free
+            step_enthalpies = (
+                [thermodynamics["delta_h_first"], thermodynamics["delta_h_second"]]
+                if n == 2
+                else [thermodynamics[f"delta_h_{i}"] for i in range(1, n + 1)]
+            )
+        if n == 2:
+            out["delta_h_first"], out["delta_h_second"] = step_enthalpies
+        else:
+            for i, value in enumerate(step_enthalpies, start=1):
+                out[f"delta_h_{i}"] = value
+        return out
 
     @staticmethod
-    def _species(total_receptor, total_ligand, ka1, ka2):
-        def species_given_free_ligand(free_ligand):
-            z = 1.0 + 2.0 * ka1 * free_ligand + ka1 * ka2 * free_ligand * free_ligand
-            apo = total_receptor / z
-            singly = total_receptor * 2.0 * ka1 * free_ligand / z
-            doubly = total_receptor * ka1 * ka2 * free_ligand * free_ligand / z
-            return apo, singly, doubly
+    def _stepwise_delta_g(thermodynamics) -> list:
+        """Intrinsic stepwise binding free energies ``[delta_g_1, ..., delta_g_n]`` from the kwargs.
+
+        Two-site legacy form ``{delta_g, delta_delta_g}`` -> ``[delta_g, delta_g + delta_delta_g]``;
+        general form ``{delta_g, delta_delta_g_2, ...}`` -> ``[delta_g, delta_g + delta_delta_g_2, ...]``.
+        """
+        delta_g = thermodynamics["delta_g"]
+        if "delta_delta_g" in thermodynamics:
+            return [delta_g, delta_g + thermodynamics["delta_delta_g"]]
+        offsets = [0.0]
+        index = 2
+        while f"delta_delta_g_{index}" in thermodynamics:
+            offsets.append(thermodynamics[f"delta_delta_g_{index}"])
+            index += 1
+        return [delta_g + offset for offset in offsets]
+
+    @staticmethod
+    def _stepwise_delta_h(thermodynamics) -> list:
+        """Stepwise binding enthalpies ``[delta_h_1, ..., delta_h_n]`` from the kwargs.
+
+        Two-site legacy form uses ``delta_h_first`` / ``delta_h_second``; general form uses
+        ``delta_h_1 .. delta_h_n``.
+        """
+        if "delta_h_first" in thermodynamics or "delta_h_second" in thermodynamics:
+            return [thermodynamics["delta_h_first"], thermodynamics["delta_h_second"]]
+        enthalpies = []
+        index = 1
+        while f"delta_h_{index}" in thermodynamics:
+            enthalpies.append(thermodynamics[f"delta_h_{index}"])
+            index += 1
+        return enthalpies
+
+    @staticmethod
+    def _species(total_receptor, total_ligand, association_constants):
+        """Equilibrium ``(free_ligand, apo, [bound_1, ..., bound_n])`` for ``n`` interacting sites.
+
+        ``association_constants`` is the length-``n`` sequence of intrinsic stepwise constants ``ka_i``;
+        the binding polynomial carries the binomial statistical factors ``C(n, j)``. Free ligand is
+        found by bisection (monotone on ``[0, total_ligand]``) then one Newton step so the result keeps
+        the exact implicit-function gradient -- the bisection bracket comparisons would block autodiff.
+        """
+        n = len(association_constants)
+        # Polynomial coefficients a_j = C(n, j) * prod_{i<=j} ka_i (with a_0 = 1).
+        coefficients = [jnp.asarray(1.0)]
+        running = jnp.asarray(1.0)
+        for j in range(1, n + 1):
+            running = running * association_constants[j - 1]
+            coefficients.append(comb(n, j) * running)
+
+        def occupancy_terms(free_ligand):
+            terms = [coefficients[j] * free_ligand ** j for j in range(1, n + 1)]
+            partition = coefficients[0] + sum(terms)
+            return terms, partition
 
         def mass_balance(free_ligand):
-            _apo, singly, doubly = species_given_free_ligand(free_ligand)
-            return free_ligand + singly + 2.0 * doubly - total_ligand
+            terms, partition = occupancy_terms(free_ligand)
+            bound_ligand = sum(j * terms[j - 1] for j in range(1, n + 1)) / partition
+            return free_ligand + total_receptor * bound_ligand - total_ligand
 
-        # Bisection gives a robust value but its autodiff gradient is wrong (the
-        # bracket comparisons block gradient flow), which corrupts NUTS and MAP
-        # gradients. Solve for the value with bisection, then take a single Newton
-        # step so the result carries the exact implicit-function gradient.
         def body(_i, bounds):
             lo, hi = bounds
             mid = 0.5 * (lo + hi)
@@ -348,7 +414,11 @@ class CooperativeBindingModel:
         balance = mass_balance(free_ligand)
         balance_slope = jax.grad(mass_balance)(free_ligand)
         free_ligand = free_ligand - balance / balance_slope
-        return species_given_free_ligand(free_ligand)
+
+        terms, partition = occupancy_terms(free_ligand)
+        apo = total_receptor / partition
+        bound = [total_receptor * terms[j - 1] / partition for j in range(1, n + 1)]
+        return free_ligand, apo, bound
 
     @staticmethod
     def expected_heats(
@@ -358,83 +428,76 @@ class CooperativeBindingModel:
         cell_concentration_molar,
         syringe_concentration_molar,
         temperature_k,
-        delta_g,
-        delta_delta_g,
-        delta_h_first,
-        delta_h_second,
         heat_offset,
+        **thermodynamics,
     ):
-        ka1 = association_constant_from_delta_g(delta_g, temperature_k)
-        ka2 = association_constant_from_delta_g(delta_g + delta_delta_g, temperature_k)
+        """Per-injection heats. ``thermodynamics`` carries the stepwise free energies + enthalpies in
+        either the two-site legacy names or the indexed ``n``-site names (see the class docstring)."""
+        stepwise_delta_g = CooperativeBindingModel._stepwise_delta_g(thermodynamics)
+        stepwise_delta_h = CooperativeBindingModel._stepwise_delta_h(thermodynamics)
+        association_constants = [association_constant_from_delta_g(g, temperature_k) for g in stepwise_delta_g]
+        n = len(association_constants)
         volumes = jnp.asarray(injection_volumes_liter)
 
         def step(carry, injection_volume):
-            total_receptor, total_ligand, previous_first, previous_second = carry
+            total_receptor, total_ligand = carry[0], carry[1]
+            previous = carry[2:]  # cumulative "at least k+1 bound" from the prior injection
             dilution = 1.0 - injection_volume / cell_volume_liter
             total_receptor = total_receptor * dilution
             total_ligand = total_ligand * dilution + syringe_concentration_molar * (injection_volume / cell_volume_liter)
-            _apo, singly, doubly = CooperativeBindingModel._species(total_receptor, total_ligand, ka1, ka2)
-            first_bound = singly + doubly
-            second_bound = doubly
-            delta_first_mol = cell_volume_liter * (first_bound - dilution * previous_first)
-            delta_second_mol = cell_volume_liter * (second_bound - dilution * previous_second)
-            heat = (
-                delta_h_first * delta_first_mol
-                + delta_h_second * delta_second_mol
-            ) * MICROCALORIES_PER_KCAL + heat_offset
-            return (total_receptor, total_ligand, first_bound, second_bound), heat
+            _free, _apo, bound = CooperativeBindingModel._species(total_receptor, total_ligand, association_constants)
+            at_least = [sum(bound[k:]) for k in range(n)]  # receptor concentration with >= k+1 ligands
+            delta_mol = sum(stepwise_delta_h[k] * (at_least[k] - dilution * previous[k]) for k in range(n))
+            heat = cell_volume_liter * delta_mol * MICROCALORIES_PER_KCAL + heat_offset
+            return (total_receptor, total_ligand, *at_least), heat
 
-        carry0 = (cell_concentration_molar, 0.0, 0.0, 0.0)
-        (_total_r, _total_l, _first, _second), heats = jax.lax.scan(step, carry0, volumes)
+        carry0 = (cell_concentration_molar, 0.0) + (0.0,) * n
+        _carry, heats = jax.lax.scan(step, carry0, volumes)
         return heats
 
     @staticmethod
-    def equilibrium_species(protein_molar, ligand_molar, temperature_k, *, delta_g, delta_delta_g):
-        """Equilibrium ``{free_ligand, apo_protein, singly_bound, doubly_bound}`` for the two-site model.
+    def equilibrium_species(protein_molar, ligand_molar, temperature_k, **thermodynamics):
+        """Equilibrium species, vectorized over the ``(protein, ligand)`` totals.
 
-        Vectorized over the ``(protein, ligand)`` totals (the per-condition equilibrium solve is
-        ``_species``, vmapped here over conditions). Exposes the model's species to other modalities.
+        Returns ``{free_ligand, apo_protein, ...}``; the bound states are keyed ``singly_bound`` /
+        ``doubly_bound`` for two sites (backward compatible) and ``bound_1 .. bound_n`` for more.
+        Exposes the model's species to other modalities (e.g. the WAXS MCR).
         """
-        ka1 = association_constant_from_delta_g(delta_g, temperature_k)
-        ka2 = association_constant_from_delta_g(delta_g + delta_delta_g, temperature_k)
+        stepwise_delta_g = CooperativeBindingModel._stepwise_delta_g(thermodynamics)
+        association_constants = [association_constant_from_delta_g(g, temperature_k) for g in stepwise_delta_g]
+        n = len(association_constants)
         protein = jnp.atleast_1d(jnp.asarray(protein_molar, dtype=float))
         ligand = jnp.atleast_1d(jnp.asarray(ligand_molar, dtype=float))
-        apo, singly, doubly = jax.vmap(lambda p, lig: CooperativeBindingModel._species(p, lig, ka1, ka2))(
-            protein, ligand
-        )
-        return {
-            "free_ligand": ligand - singly - 2.0 * doubly,  # mass balance: L_tot - bound ligand
-            "apo_protein": apo,
-            "singly_bound": singly,
-            "doubly_bound": doubly,
-        }
+        free, apo, bound = jax.vmap(
+            lambda p, lig: CooperativeBindingModel._species(p, lig, association_constants)
+        )(protein, ligand)
+        species = {"free_ligand": free, "apo_protein": apo}
+        if n == 2:
+            species["singly_bound"], species["doubly_bound"] = bound[0], bound[1]
+        else:
+            for k in range(n):
+                species[f"bound_{k + 1}"] = bound[k]
+        return species
 
     @staticmethod
-    def enthalpy_density(
-        receptor_molar,
-        ligand_molar,
-        temperature_k,
-        *,
-        delta_g,
-        delta_delta_g,
-        delta_h_first,
-        delta_h_second,
-    ):
-        """Equilibrium enthalpy density (kcal/L) for the two-site receptor, vectorized over the
-        ``(receptor, ligand)`` totals.
+    def enthalpy_density(receptor_molar, ligand_molar, temperature_k, **thermodynamics):
+        """Equilibrium enthalpy density (kcal/L) relative to apo, vectorized over the ``(receptor,
+        ligand)`` totals.
 
-        For a *preformed-dimer* TrpR model the receptor total is the dimer concentration (not
-        monomer-equivalent). Exposes the per-condition density so a likelihood can predict heats for an
-        externally supplied concentration schedule (e.g. the sequential TrpR phosphate titration).
+        For a *preformed-dimer* receptor the totals are dimer concentrations. Exposes the per-condition
+        density so a likelihood can predict heats for an externally supplied concentration schedule
+        (e.g. the sequential TrpR phosphate titration).
         """
-        ka1 = association_constant_from_delta_g(delta_g, temperature_k)
-        ka2 = association_constant_from_delta_g(delta_g + delta_delta_g, temperature_k)
+        stepwise_delta_g = CooperativeBindingModel._stepwise_delta_g(thermodynamics)
+        stepwise_delta_h = CooperativeBindingModel._stepwise_delta_h(thermodynamics)
+        association_constants = [association_constant_from_delta_g(g, temperature_k) for g in stepwise_delta_g]
+        n = len(association_constants)
         receptor = jnp.atleast_1d(jnp.asarray(receptor_molar, dtype=float))
         ligand = jnp.atleast_1d(jnp.asarray(ligand_molar, dtype=float))
 
         def density(total_receptor, total_ligand):
-            _apo, singly, doubly = CooperativeBindingModel._species(total_receptor, total_ligand, ka1, ka2)
-            return delta_h_first * (singly + doubly) + delta_h_second * doubly
+            _free, _apo, bound = CooperativeBindingModel._species(total_receptor, total_ligand, association_constants)
+            return sum(stepwise_delta_h[k] * sum(bound[k:]) for k in range(n))
 
         return jax.vmap(density)(receptor, ligand)
 
