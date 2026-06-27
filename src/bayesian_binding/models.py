@@ -303,12 +303,25 @@ class CooperativeBindingModel:
       Bayes factor nests inside the full model with ``delta_delta_g`` as the single extra parameter.
 
     This mirrors the ``racemic`` flag on ``EnantiomericMixtureBindingModel``.
+
+    - ``distinct_sites`` -- **n independent, non-identical sites** (default off). The binomial,
+      identical-site partition function ``prod(1 + ka x)`` with statistical factors is replaced by the
+      explicit product over distinct sites; the same parameter names are reused with reinterpreted
+      meaning: ``delta_g`` = site-1 free energy and ``delta_delta_g`` / ``delta_delta_g_i`` = the
+      site-i *offset* (ΔG_i − ΔG_1) rather than a cooperativity, and ``delta_h_*`` are per-site
+      enthalpies. ``equilibrium_species`` then returns the **microstates** -- ``apo_protein`` and one
+      ``bound_<sites>`` per occupied-site subset (e.g. ``bound_1``, ``bound_2``, ``bound_12`` for two
+      sites) -- so a modality that can tell the sites apart (WAXS) resolves each distinct bound pattern;
+      ITC heats sum over per-site occupancies and are unaffected. Sites are independent (no site-site
+      cooperativity in this form). The identical-site path (``distinct_sites=False``) is byte-for-byte
+      unchanged.
     """
 
     name: str = "cooperative"
     n_sites: int = 2
     equivalent_sites: bool = False
     equal_affinity: bool = False
+    distinct_sites: bool = False
 
     def heat_kwargs(self, thermodynamics) -> dict:
         """Return the ``expected_heats`` thermodynamic kwargs from the sampled parameters.
@@ -421,7 +434,57 @@ class CooperativeBindingModel:
         return free_ligand, apo, bound
 
     @staticmethod
+    def _distinct_microstate_sites(n: int) -> list:
+        """0-based occupied-site tuples for every non-empty microstate, ordered by bitmask 1..2^n-1."""
+        return [tuple(i for i in range(n) if mask & (1 << i)) for mask in range(1, 1 << n)]
+
+    @staticmethod
+    def _free_ligand_distinct(total_receptor, total_ligand, association_constants):
+        """Free ligand for ``n`` INDEPENDENT distinct sites: ``x + R * sum_i theta_i = L`` with
+        ``theta_i = ka_i x / (1 + ka_i x)``. Bisection (monotone on ``[0, L]``) + one Newton step, so the
+        result keeps the exact implicit-function gradient (matching :meth:`_species`)."""
+        ka = association_constants
+        n = len(ka)
+
+        def mass_balance(free_ligand):
+            bound = sum(ka[i] * free_ligand / (1.0 + ka[i] * free_ligand) for i in range(n))
+            return free_ligand + total_receptor * bound - total_ligand
+
+        def body(_i, bounds):
+            lo, hi = bounds
+            mid = 0.5 * (lo + hi)
+            return jnp.where(mass_balance(mid) > 0.0, jnp.asarray([lo, mid]), jnp.asarray([mid, hi]))
+
+        bounds = jax.lax.fori_loop(0, 80, body, jnp.asarray([0.0, jnp.maximum(total_ligand, 0.0)]))
+        free_ligand = jax.lax.stop_gradient(0.5 * (bounds[0] + bounds[1]))
+        return free_ligand - mass_balance(free_ligand) / jax.grad(mass_balance)(free_ligand)
+
+    @staticmethod
+    def _species_distinct(total_receptor, total_ligand, association_constants):
+        """``(free_ligand, apo, [microstate populations])`` for ``n`` independent distinct sites.
+
+        The microstate list is ordered by :meth:`_distinct_microstate_sites`; microstate ``S`` has
+        receptor concentration ``R * prod_{i in S}(ka_i x) / z`` with ``z = prod_i (1 + ka_i x)``, and the
+        populations + ``apo`` sum to ``R``.
+        """
+        ka = association_constants
+        n = len(ka)
+        x = CooperativeBindingModel._free_ligand_distinct(total_receptor, total_ligand, association_constants)
+        partition = 1.0 + ka[0] * x
+        for i in range(1, n):
+            partition = partition * (1.0 + ka[i] * x)
+        apo = total_receptor / partition
+        microstates = []
+        for mask in range(1, 1 << n):
+            weight = total_receptor
+            for i in range(n):
+                if mask & (1 << i):
+                    weight = weight * (ka[i] * x)
+            microstates.append(weight / partition)
+        return x, apo, microstates
+
     def expected_heats(
+        self,
         injection_volumes_liter,
         *,
         cell_volume_liter,
@@ -439,6 +502,25 @@ class CooperativeBindingModel:
         n = len(association_constants)
         volumes = jnp.asarray(injection_volumes_liter)
 
+        if self.distinct_sites:
+            # independent distinct sites: total relative enthalpy = R * sum_i theta_i * dH_i, so the heat
+            # tracks the change in per-site bound receptor concentration (no occupancy/binomial step).
+            def step_distinct(carry, injection_volume):
+                total_receptor, total_ligand = carry[0], carry[1]
+                previous = carry[2:]  # per-site bound receptor concentration from the prior injection
+                dilution = 1.0 - injection_volume / cell_volume_liter
+                total_receptor = total_receptor * dilution
+                total_ligand = total_ligand * dilution + syringe_concentration_molar * (injection_volume / cell_volume_liter)
+                free = CooperativeBindingModel._free_ligand_distinct(total_receptor, total_ligand, association_constants)
+                bound = [total_receptor * association_constants[i] * free / (1.0 + association_constants[i] * free) for i in range(n)]
+                delta_mol = sum(stepwise_delta_h[i] * (bound[i] - dilution * previous[i]) for i in range(n))
+                heat = cell_volume_liter * delta_mol * MICROCALORIES_PER_KCAL + heat_offset
+                return (total_receptor, total_ligand, *bound), heat
+
+            carry0 = (cell_concentration_molar, 0.0) + (0.0,) * n
+            _carry, heats = jax.lax.scan(step_distinct, carry0, volumes)
+            return heats
+
         def step(carry, injection_volume):
             total_receptor, total_ligand = carry[0], carry[1]
             previous = carry[2:]  # cumulative "at least k+1 bound" from the prior injection
@@ -455,19 +537,27 @@ class CooperativeBindingModel:
         _carry, heats = jax.lax.scan(step, carry0, volumes)
         return heats
 
-    @staticmethod
-    def equilibrium_species(protein_molar, ligand_molar, temperature_k, **thermodynamics):
+    def equilibrium_species(self, protein_molar, ligand_molar, temperature_k, **thermodynamics):
         """Equilibrium species, vectorized over the ``(protein, ligand)`` totals.
 
-        Returns ``{free_ligand, apo_protein, ...}``; the bound states are keyed ``singly_bound`` /
+        Identical sites: ``{free_ligand, apo_protein, ...}`` with bound states keyed ``singly_bound`` /
         ``doubly_bound`` for two sites (backward compatible) and ``bound_1 .. bound_n`` for more.
-        Exposes the model's species to other modalities (e.g. the WAXS MCR).
+        ``distinct_sites``: the bound states are the **microstates** ``bound_<sites>`` (e.g. ``bound_1``,
+        ``bound_2``, ``bound_12``). Exposes the model's species to other modalities (e.g. the WAXS MCR).
         """
         stepwise_delta_g = CooperativeBindingModel._stepwise_delta_g(thermodynamics)
         association_constants = [association_constant_from_delta_g(g, temperature_k) for g in stepwise_delta_g]
         n = len(association_constants)
         protein = jnp.atleast_1d(jnp.asarray(protein_molar, dtype=float))
         ligand = jnp.atleast_1d(jnp.asarray(ligand_molar, dtype=float))
+        if self.distinct_sites:
+            free, apo, microstates = jax.vmap(
+                lambda p, lig: CooperativeBindingModel._species_distinct(p, lig, association_constants)
+            )(protein, ligand)
+            species = {"free_ligand": free, "apo_protein": apo}
+            for sites, population in zip(CooperativeBindingModel._distinct_microstate_sites(n), microstates):
+                species["bound_" + "".join(str(i + 1) for i in sites)] = population
+            return species
         free, apo, bound = jax.vmap(
             lambda p, lig: CooperativeBindingModel._species(p, lig, association_constants)
         )(protein, ligand)
@@ -479,8 +569,7 @@ class CooperativeBindingModel:
                 species[f"bound_{k + 1}"] = bound[k]
         return species
 
-    @staticmethod
-    def enthalpy_density(receptor_molar, ligand_molar, temperature_k, **thermodynamics):
+    def enthalpy_density(self, receptor_molar, ligand_molar, temperature_k, **thermodynamics):
         """Equilibrium enthalpy density (kcal/L) relative to apo, vectorized over the ``(receptor,
         ligand)`` totals.
 
@@ -494,6 +583,16 @@ class CooperativeBindingModel:
         n = len(association_constants)
         receptor = jnp.atleast_1d(jnp.asarray(receptor_molar, dtype=float))
         ligand = jnp.atleast_1d(jnp.asarray(ligand_molar, dtype=float))
+
+        if self.distinct_sites:
+            def density_distinct(total_receptor, total_ligand):
+                free = CooperativeBindingModel._free_ligand_distinct(total_receptor, total_ligand, association_constants)
+                return sum(
+                    stepwise_delta_h[i] * (total_receptor * association_constants[i] * free / (1.0 + association_constants[i] * free))
+                    for i in range(n)
+                )
+
+            return jax.vmap(density_distinct)(receptor, ligand)
 
         def density(total_receptor, total_ligand):
             _free, _apo, bound = CooperativeBindingModel._species(total_receptor, total_ligand, association_constants)
@@ -954,6 +1053,7 @@ MODEL_REGISTRY = {
     "cooperative_equal_affinity": CooperativeBindingModel(
         name="cooperative_equal_affinity", equal_affinity=True
     ),
+    "cooperative_distinct": CooperativeBindingModel(name="cooperative_distinct", distinct_sites=True),
     "dimerization_cooperative": DimerizationCooperativeBindingModel(),
     "dimerization_monomer_cooperative": DimerizationMonomerCooperativeBindingModel(),
     "racemic_mixture": EnantiomericMixtureBindingModel(name="racemic_mixture", racemic=True),

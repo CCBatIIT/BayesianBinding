@@ -74,6 +74,9 @@ _MIXTURE_MODEL_NAMES = ("racemic_mixture", "enantiomeric_mixture")
 GLOBAL_THERMODYNAMIC_PARAMETERS = {
     "two_component": ("delta_g", "delta_h"),
     "cooperative": ("delta_g", "delta_delta_g", "delta_h_first", "delta_h_second"),
+    # Distinct, independent two sites: same parameter names (delta_g = site A, delta_delta_g = site-B
+    # offset, delta_h_* = per-site enthalpies); only the partition function / species differ.
+    "cooperative_distinct": ("delta_g", "delta_delta_g", "delta_h_first", "delta_h_second"),
     # No-cooperativity null: the two sites are forced equal, so only delta_g and delta_h are fit.
     "cooperative_equivalent_sites": ("delta_g", "delta_h"),
     # Free-energy-only null: delta_delta_g fixed to 0 but both step enthalpies free.
@@ -289,7 +292,7 @@ def build_numpyro_model(
                 delta_h=delta_h,
                 heat_offset=heat_offset,
             )
-        elif model_name == "cooperative":
+        elif model_name in ("cooperative", "cooperative_distinct"):
             b = all_bounds["delta_g"]
             delta_g = _get_fixed_or_sample(fixed, "delta_g", lambda: _uniform("delta_g", b.low, b.high))
             b = all_bounds["delta_delta_g"]

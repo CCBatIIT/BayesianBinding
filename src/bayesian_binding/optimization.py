@@ -53,7 +53,7 @@ def sample_site_names(
     names = [cell_name, syringe_name, "heat_offset", "log_sigma"]
     if model_name in ("two_component", "cooperative_equivalent_sites"):
         names.extend(["delta_g", "delta_h"])
-    elif model_name == "cooperative":
+    elif model_name in ("cooperative", "cooperative_distinct"):
         names.extend(["delta_g", "delta_delta_g", "delta_h_first", "delta_h_second"])
     elif model_name == "cooperative_equal_affinity":
         names.extend(["delta_g", "delta_h_first", "delta_h_second"])
@@ -120,7 +120,7 @@ def initial_params(
         params.update({"delta_g1": -10.0, "delta_delta_g": 2.0, "delta_h1": -7.0, "delta_h2": -2.5})
         if model_name == "enantiomeric_mixture":
             params["rho"] = 0.5
-    elif model_name == "cooperative":
+    elif model_name in ("cooperative", "cooperative_distinct"):
         params.update(
             {
                 "delta_g": -8.0,
@@ -225,7 +225,7 @@ def parameter_bounds(
         result["delta_h2"] = (-100.0, 100.0)
         if model_name == "enantiomeric_mixture":
             result["rho"] = (0.0, 1.0)
-    elif model_name == "cooperative":
+    elif model_name in ("cooperative", "cooperative_distinct"):
         for name in ["delta_g", "delta_delta_g", "delta_h_first", "delta_h_second"]:
             b = all_bounds[name]
             result[name] = (b.low, b.high)
@@ -273,7 +273,7 @@ def fit_map(
     )
     names = sample_site_names(model_name, fixed, **concentration_kwargs)
     starts = [initial_params(experiment, model_name=model_name, fixed=fixed, **concentration_kwargs)]
-    if model_name in {"two_component", "cooperative"}:
+    if model_name in {"two_component", "cooperative", "cooperative_distinct"}:
         for delta_g in [-6.0, -8.0, -10.0]:
             start = initial_params(experiment, model_name=model_name, fixed=fixed, **concentration_kwargs)
             if "delta_g" in start:
@@ -364,7 +364,7 @@ def initial_global_params(
     fixed = dict(fixed or {})
     if model_name in ("two_component", "cooperative_equivalent_sites"):
         params: dict[str, float] = {"delta_g": -8.0, "delta_h": -5.0}
-    elif model_name == "cooperative":
+    elif model_name in ("cooperative", "cooperative_distinct"):
         params = {
             "delta_g": -7.0,
             "delta_delta_g": -1.0,
@@ -587,7 +587,7 @@ def fit_map_global(
     )
     scale_starts = (concentration_scale_prior_mean * 0.75, concentration_scale_prior_mean)
     starts: list[dict[str, float]] = [dict(defaults)]
-    if model_name == "cooperative":
+    if model_name in ("cooperative", "cooperative_distinct"):
         for delta_g in (-5.5, -6.3, -7.0, -8.0):
             for delta_delta_g in (-2.5, -1.3, 0.0):
                 for delta_h_first in (-7.0, -9.0, -12.0):

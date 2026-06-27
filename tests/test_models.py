@@ -53,7 +53,7 @@ def test_cooperative_two_site_default_matches_explicit_polynomial():
     assert float(bound[0]) == approx(protein * 2.0 * ka1 * free / z, rel=1e-9)  # singly
     assert float(bound[1]) == approx(protein * ka1 * ka2 * free**2 / z, rel=1e-9)  # doubly
     # Legacy equilibrium_species keys preserved for two sites.
-    species = CooperativeBindingModel.equilibrium_species(
+    species = CooperativeBindingModel().equilibrium_species(
         jnp.array([protein]), jnp.array([ligand]), temperature_k, delta_g=delta_g, delta_delta_g=delta_delta_g
     )
     assert set(species) == {"free_ligand", "apo_protein", "singly_bound", "doubly_bound"}
@@ -120,6 +120,26 @@ def test_cooperative_four_site_equilibrium_species_columns():
     stacked = np.stack([np.asarray(species[name]) for name in species])
     assert stacked.shape == (6, 2)
     assert np.all(np.isfinite(stacked)) and np.all(stacked >= -1e-12)
+
+
+def test_cooperative_distinct_sites_microstates_and_reduction():
+    """distinct_sites=True returns microstate species with exact mass balance, and reduces to the
+    identical-sites model when the two sites are made equal (delta_delta_g = 0)."""
+    distinct = CooperativeBindingModel(distinct_sites=True)
+    protein = jnp.array([50e-6, 100e-6])
+    ligand = jnp.array([20e-6, 400e-6])
+    sp = distinct.equilibrium_species(protein, ligand, _T, delta_g=-7.0, delta_delta_g=1.5)
+    assert set(sp) == {"free_ligand", "apo_protein", "bound_1", "bound_2", "bound_12"}
+    protein_recon = sp["apo_protein"] + sp["bound_1"] + sp["bound_2"] + sp["bound_12"]
+    ligand_recon = sp["free_ligand"] + sp["bound_1"] + sp["bound_2"] + 2.0 * sp["bound_12"]
+    np.testing.assert_allclose(np.asarray(protein_recon), np.asarray(protein), rtol=1e-5, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(ligand_recon), np.asarray(ligand), rtol=1e-5, atol=1e-12)
+    # Equal sites -> distinct reduces to identical (singly_bound = bound_1 + bound_2, doubly = bound_12).
+    eq = distinct.equilibrium_species(protein, ligand, _T, delta_g=-7.0, delta_delta_g=0.0)
+    ident = CooperativeBindingModel().equilibrium_species(protein, ligand, _T, delta_g=-7.0, delta_delta_g=0.0)
+    np.testing.assert_allclose(np.asarray(eq["bound_1"]), np.asarray(eq["bound_2"]), rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(eq["bound_1"] + eq["bound_2"]), np.asarray(ident["singly_bound"]), rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(eq["bound_12"]), np.asarray(ident["doubly_bound"]), rtol=1e-5)
 
 
 def test_adk_adp_steady_state_mass_balance_and_reaction_quotient():
@@ -211,7 +231,7 @@ def test_adk_adp_steady_state_reduces_to_analytic_no_protein_case():
 
 def test_cooperative_expected_heats_shape():
     volumes = jnp.ones(10) * 1.0e-6
-    q = CooperativeBindingModel.expected_heats(
+    q = CooperativeBindingModel().expected_heats(
         volumes,
         cell_volume_liter=1.4e-3,
         cell_concentration_molar=50e-6,
@@ -296,7 +316,7 @@ def test_dimerization_monomer_mass_balance_closes():
     """Equilibrium species reproduce the monomer-equivalent protein and total-ligand inputs."""
     protein = jnp.array([5e-6, 7.6e-6, 1.0e-5])
     ligand = jnp.array([1e-6, 5e-6, 2e-5])
-    sp = DimerizationMonomerCooperativeBindingModel.equilibrium_species(
+    sp = DimerizationMonomerCooperativeBindingModel().equilibrium_species(
         protein, ligand, 298.15,
         delta_g_dimer=-8.0, delta_g_binding=-7.0, delta_delta_g_binding=-0.5, delta_delta_g_monomer=1.0,
     )
@@ -434,7 +454,7 @@ def test_two_component_equilibrium_species_mass_balance_and_law_of_mass_action()
 def test_cooperative_equilibrium_species_mass_balance_and_limits():
     protein = jnp.array([50e-6, 100e-6])
     ligand = jnp.array([20e-6, 400e-6])
-    sp = CooperativeBindingModel.equilibrium_species(protein, ligand, _T, delta_g=-7.0, delta_delta_g=-1.0)
+    sp = CooperativeBindingModel().equilibrium_species(protein, ligand, _T, delta_g=-7.0, delta_delta_g=-1.0)
     protein_recon = sp["apo_protein"] + sp["singly_bound"] + sp["doubly_bound"]
     ligand_recon = sp["free_ligand"] + sp["singly_bound"] + 2.0 * sp["doubly_bound"]
     np.testing.assert_allclose(np.asarray(protein_recon), np.asarray(protein), rtol=1e-5, atol=1e-12)
@@ -442,7 +462,7 @@ def test_cooperative_equilibrium_species_mass_balance_and_limits():
     for key in ("apo_protein", "singly_bound", "doubly_bound", "free_ligand"):
         assert np.all(np.asarray(sp[key]) >= -1e-12)
     # No ligand -> all apo.
-    sp0 = CooperativeBindingModel.equilibrium_species(protein, jnp.zeros_like(ligand), _T, delta_g=-7.0, delta_delta_g=-1.0)
+    sp0 = CooperativeBindingModel().equilibrium_species(protein, jnp.zeros_like(ligand), _T, delta_g=-7.0, delta_delta_g=-1.0)
     np.testing.assert_allclose(np.asarray(sp0["apo_protein"]), np.asarray(protein), rtol=1e-6, atol=1e-12)
 
 
@@ -453,7 +473,7 @@ def test_cooperative_equilibrium_species_implicit_gradient_matches_finite_differ
     ligand = jnp.array([120e-6])
 
     def total_bound(delta_g):
-        sp = CooperativeBindingModel.equilibrium_species(protein, ligand, _T, delta_g=delta_g, delta_delta_g=-1.0)
+        sp = CooperativeBindingModel().equilibrium_species(protein, ligand, _T, delta_g=delta_g, delta_delta_g=-1.0)
         return jnp.sum(sp["singly_bound"] + 2.0 * sp["doubly_bound"])
 
     grad = float(jax.grad(total_bound)(-7.0))
@@ -466,7 +486,7 @@ def test_cooperative_equilibrium_species_implicit_gradient_matches_finite_differ
 def test_dimerization_cooperative_equilibrium_species_mass_balance():
     protein = jnp.array([10e-6, 40e-6])
     ligand = jnp.array([5e-6, 50e-6])
-    sp = DimerizationCooperativeBindingModel.equilibrium_species(
+    sp = DimerizationCooperativeBindingModel().equilibrium_species(
         protein, ligand, _T, delta_g_dimer=-8.0, delta_g_binding=-7.0, delta_delta_g_binding=-0.5
     )
     protein_recon = sp["free_monomer"] + 2.0 * (sp["dimer"] + sp["singly_bound"] + sp["doubly_bound"])
